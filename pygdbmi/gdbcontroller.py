@@ -108,7 +108,7 @@ class GdbController():
             print('\nwriting: %s' % mi_cmd_to_write)
 
         if not mi_cmd_to_write.endswith('\n'):
-            mi_cmd_to_write_nl = mi_cmd_to_write + '\n'
+            mi_cmd_to_write = mi_cmd_to_write + '\n'
 
         if True:
             # select not implemented in windows for pipes
@@ -119,7 +119,7 @@ class GdbController():
         for fileno in outputready:
             if fileno == self.stdin_fileno:
                 # ready to write
-                self.gdb_process.stdin.write(mi_cmd_to_write_nl.encode())
+                self.gdb_process.stdin.write(mi_cmd_to_write.encode())
                 # don't forget to flush for Python3, otherwise gdb won't realize there is data
                 # to evaluate, and we won't get a response
                 self.gdb_process.stdin.flush()
