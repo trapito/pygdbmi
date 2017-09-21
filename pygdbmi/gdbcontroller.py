@@ -99,7 +99,9 @@ class GdbController():
             timeout_sec=DEFAULT_GDB_TIMEOUT_SEC,
             verbose=False,
             raise_error_on_timeout=True,
-            read_response=True):
+            read_response=True,
+            blocking_call=False,
+            wait_for_result=False):
         """Write to gdb process. Block while parsing responses from gdb for a maximum of timeout_sec.
 
         A mutex is obtained before writing and released before returning
@@ -145,7 +147,10 @@ class GdbController():
             # assume it's always ready
             outputready = [self.stdin_fileno]
         else:
-            _, outputready, _ = select.select([], self.write_list, [], timeout_sec)
+            if blocking_call:
+                _, outputready, _ = select.select([], self.write_list, [])
+            else:
+                _, outputready, _ = select.select([], self.write_list, [], timeout_sec)
         for fileno in outputready:
             if fileno == self.stdin_fileno:
                 # ready to write
@@ -157,11 +162,17 @@ class GdbController():
                 print('developer error: got unexpected fileno %d, event %d' % fileno)
 
         if read_response is True:
-            return self.get_gdb_response(timeout_sec=timeout_sec, raise_error_on_timeout=raise_error_on_timeout, verbose=verbose)
+            return self.get_gdb_response(timeout_sec=timeout_sec, 
+                                         raise_error_on_timeout=raise_error_on_timeout, 
+                                         verbose=verbose, 
+                                         blocking_call=blocking_call, 
+                                         wait_for_result=wait_for_result)
         else:
             return []
 
-    def get_gdb_response(self, timeout_sec=DEFAULT_GDB_TIMEOUT_SEC, raise_error_on_timeout=True, verbose=False):
+    def get_gdb_response(self, timeout_sec=DEFAULT_GDB_TIMEOUT_SEC, 
+                         raise_error_on_timeout=True, verbose=False, 
+                         blocking_call=False, wait_for_result=False):
         """Get response from GDB, and block while doing so. If GDB does not have any response ready to be read
         by timeout_sec, an exception is raised.
 
@@ -194,9 +205,9 @@ class GdbController():
         self.mutex.acquire(MUTEX_AQUIRE_WAIT_TIME_SEC)
 
         if USING_WINDOWS:
-            retval = self._get_responses_windows(timeout_sec, verbose)
+            retval = self._get_responses_windows(timeout_sec, verbose, blocking_call, wait_for_result)
         else:
-            retval = self._get_responses_unix(timeout_sec, verbose)
+            retval = self._get_responses_unix(timeout_sec, verbose, blocking_call, wait_for_result)
 
         self.mutex.release()
 
@@ -205,7 +216,7 @@ class GdbController():
         else:
             return retval
 
-    def _get_responses_windows(self, timeout_sec, verbose):
+    def _get_responses_windows(self, timeout_sec, verbose, blocking_call, wait_for_result):
         """Get responses on windows. Assume no support for select and use a while loop."""
         timeout_time_sec = time.time() + timeout_sec
         responses = []
@@ -213,24 +224,41 @@ class GdbController():
             try:
                 self.gdb_process.stdout.flush()
                 raw_output = self.gdb_process.stdout.read()
-                responses += self._get_responses_list(raw_output, 'stdout', verbose)
+                responses.extend(self._get_responses_list(raw_output, 'stdout', verbose))
             except IOError:
                 pass
 
             try:
                 self.gdb_process.stderr.flush()
                 raw_output = self.gdb_process.stderr.read()
-                responses += self._get_responses_list(raw_output, 'stderr', verbose)
+                responses.extend(self._get_responses_list(raw_output, 'stderr', verbose))
             except IOError:
                 pass
+
+            if blocking_call:
+                result_received = False
+
+                if wait_for_result:
+                    for response in responses:
+                        if response['type'] == 'result':
+                            result_received = True
+                            break
+                else:
+                    result_received = True
+
+                if result_received:
+                    break
 
             if time.time() > timeout_time_sec:
                 break
         return responses
 
-    def _get_responses_unix(self, timeout_sec, verbose):
+    def _get_responses_unix(self, timeout_sec, verbose, blocking_call, wait_for_result):
         """Get responses on unix-like system. Use select to wait for output."""
-        events, _, _ = select.select(self.read_list, [], [], timeout_sec)
+        if blocking_call:
+            events, _, _ = select.select(self.read_list, [], [])
+        else:
+            events, _, _ = select.select(self.read_list, [], [], timeout_sec)
 
         # timeout_sec can be zero, in which case we won't waste the CPU cycles retrieving and computing a timeout time
         if timeout_sec != 0:
@@ -254,18 +282,30 @@ class GdbController():
                         self.mutex.release()
                         raise ValueError('Developer error. Got unexpected file number %d' % fileno)
 
-                    r = self._get_responses_list(raw_output, stream, verbose)
-
-                    responses += r
+                    responses.extend(self._get_responses_list(raw_output, stream, verbose))
 
             except IOError:  # only occurs in python 2.7
                 pass
 
-            if timeout_sec == 0:  # just exit immediately
+            if blocking_call:
+                result_received = False
+
+                if wait_for_result:
+                    for response in responses:
+                        if response['type'] == 'result':
+                            result_received = True
+                else:
+                    result_received = True
+
+                if result_received:
+                    break
+
+            elif timeout_sec == 0:  # just exit immediately
                 break
 
             elif time.time() > timeout_time_sec:
                 break
+
         return responses
 
     def _get_responses_list(self, raw_output, stream, verbose):
