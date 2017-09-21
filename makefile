@@ -1,8 +1,19 @@
-# run pip install -r dev_requirements.txt before running make test
-.PHONY: test publish
+.PHONY: test clean
+
 test:
 	python setup.py test
-	python setup.py checkdocs
 
-publish: test
-	python setup.py sdist upload
+clean:
+	find . -name '*.pyc' -exec rm -f {} +
+	find . -name '*.pyo' -exec rm -f {} +
+	find . -name '*~' -exec rm -f {} +
+	make -C ./pygdbmi/docs clean
+
+docs:
+	make -C ./pygdbmi/docs
+
+help:
+	@echo "Please use \`make <target>' where <target> is one of"
+	@echo "  test    to run tests"
+	@echo "  clean   to clean temporary files"
+	@echo "  docs    to generate documentation"
